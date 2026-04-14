@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}车型列表 - 中国新能源大六座车型库{% endblock %}
+{% block content %}
+<section class="filters">
+    <form method="get">
+        <label>
+            年份
+            <select name="year">
+                <option value="">全部</option>
+                {% for y in years %}
+                <option value="{{ y }}" {% if selected_year == y %}selected{% endif %}>{{ y }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label>
+            车型类别
+            <select name="category">
+                <option value="">全部</option>
+                {% for c in categories %}
+                <option value="{{ c }}" {% if selected_category == c %}selected{% endif %}>{{ c }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label>
+            关键词
+            <input type="text" name="q" value="{{ keyword }}" placeholder="品牌或车型">
+        </label>
+        <button type="submit">筛选</button>
+    </form>
+</section>
+
+<section class="meta">
+    <p>当前共 {{ vehicles|length }} 款车型，覆盖品牌：{{ brands|join("、") if brands else "无" }}</p>
+</section>
+
+<section class="card-grid">
+    {% for v in vehicles %}
+    <article class="vehicle-card">
+        <h2>{{ v.brand }} {{ v.model }}</h2>
+        <p><strong>年份：</strong>{{ v.year }} | <strong>类别：</strong>{{ v.category }}</p>
+        <p><strong>价格：</strong>{{ v.price_range }}</p>
+        <p><strong>能源：</strong>{{ v.power_type }} | <strong>座位：</strong>{{ v.seats }}座</p>
+        <a class="detail-btn" href="{{ url_for('vehicle_detail', vehicle_id=v.id) }}">查看参数与测评链接</a>
+    </article>
+    {% endfor %}
+</section>
+{% endblock %}
+

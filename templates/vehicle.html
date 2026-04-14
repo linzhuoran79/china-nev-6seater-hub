@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}{{ vehicle.brand }} {{ vehicle.model }} - 车型详情{% endblock %}
+{% block content %}
+<article class="detail-card">
+    <h2>{{ vehicle.brand }} {{ vehicle.model }}</h2>
+    <p class="badge-line">
+        <span class="badge">{{ vehicle.year }}</span>
+        <span class="badge">{{ vehicle.category }}</span>
+        <span class="badge">{{ vehicle.seats }}座</span>
+    </p>
+    <table>
+        <tr><th>价格区间</th><td>{{ vehicle.price_range }}</td></tr>
+        <tr><th>能源类型</th><td>{{ vehicle.power_type }}</td></tr>
+        <tr><th>电池容量</th><td>{{ vehicle.battery_kwh }}</td></tr>
+        <tr><th>续航</th><td>{{ vehicle.cltc_range }}</td></tr>
+        <tr><th>补能</th><td>{{ vehicle.charging }}</td></tr>
+        <tr><th>车身尺寸</th><td>{{ vehicle.dimensions }}</td></tr>
+        <tr><th>驱动形式</th><td>{{ vehicle.drive }}</td></tr>
+        <tr><th>亮点</th><td>{{ vehicle.highlights }}</td></tr>
+    </table>
+    <p>
+        <a class="video-link" href="{{ vehicle.video_link }}" target="_blank" rel="noopener noreferrer">
+            打开懂车帝测评/搜索页
+        </a>
+    </p>
+    <p><a href="{{ url_for('index') }}">返回车型列表</a></p>
+</article>
+{% endblock %}
+
