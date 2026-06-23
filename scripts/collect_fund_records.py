@@ -457,7 +457,7 @@ def extract_sale_period(pdf_text: str) -> tuple[str, str]:
     date_pat = r"(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日"
     patterns = [
         rf"发售日期[:：]?\s*{date_pat}\s*(?:至|起至|-|—|~)\s*{date_pat}",
-        rf"本基金(?:将)?自\s*{date_pat}\s*(?:至|起至|-|—|~)\s*{date_pat}\s*(?:公开)?发售",
+        rf"本基金(?:将)?自\s*{date_pat}\s*(?:至|起至|-|—|~)\s*{date_pat}\s*(?:进行|公开)?发售",
         rf"募集期为\s*{date_pat}\s*(?:至|起至|-|—|~)\s*{date_pat}",
         rf"发售时间为\s*{date_pat}\s*(?:至|起至|-|—|~)\s*{date_pat}",
     ]
@@ -518,7 +518,10 @@ def collect_launch_records(session: requests.Session) -> pd.DataFrame:
         pdf_url = clean_text(doc.get("path"))
         pdf_text, status = read_pdf_text(session, pdf_url)
         sale_start, sale_end = extract_sale_period(pdf_text)
-        if not (in_range(sale_start) or in_range(announcement_date)):
+        if sale_start:
+            if not in_range(sale_start):
+                continue
+        elif not in_range(announcement_date):
             continue
         detail = parse_efunds_detail(session, product.get("detail_url", ""))
         custodian = detail.get("custodian") or extract_custodian_from_pdf(pdf_text)
@@ -564,7 +567,10 @@ def collect_launch_records(session: requests.Session) -> pd.DataFrame:
             pdf_url = doc["url"]
             pdf_text, status = read_pdf_text(session, pdf_url)
             sale_start, sale_end = extract_sale_period(pdf_text)
-            if not (in_range(sale_start) or in_range(announcement_date)):
+            if sale_start:
+                if not in_range(sale_start):
+                    continue
+            elif not in_range(announcement_date):
                 continue
             product_name = base.get("product_name") or re.sub(r"基金份额发售公告$", "", doc["title"])
             key = f"广发基金管理有限公司|{product_name}|{pdf_url}"
