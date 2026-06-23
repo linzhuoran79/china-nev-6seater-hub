@@ -466,6 +466,15 @@ def extract_sale_period(pdf_text: str) -> tuple[str, str]:
         if m:
             groups = m.groups()
             return normalize_cn_date(*groups[:3]), normalize_cn_date(*groups[3:6])
+    single_day_patterns = [
+        rf"本基金(?:将)?于\s*{date_pat}\s*(?:进行|通过[^。；;]*公开)?发售",
+        rf"发售日期[:：]?\s*{date_pat}(?!\s*(?:至|起至|-|—|~))",
+    ]
+    for pattern in single_day_patterns:
+        m = re.search(pattern, text)
+        if m:
+            single = normalize_cn_date(*m.groups()[:3])
+            return single, single
     return "", ""
 
 
