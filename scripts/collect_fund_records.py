@@ -44,6 +44,7 @@ HEADERS = {
         "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"
     )
 }
+PDF_TEXT_CACHE: dict[str, tuple[str, str]] = {}
 
 NERIS_URL = "https://neris.csrc.gov.cn/alappr-delare/home/approval-progress/v1/list"
 EFUNDS_LIST_URL = "https://www.efunds.com.cn/Html5/lm/jjcp/"
@@ -482,13 +483,17 @@ def extract_custodian_from_pdf(pdf_text: str) -> str:
 
 
 def read_pdf_text(session: requests.Session, url: str) -> tuple[str, str]:
+    if url in PDF_TEXT_CACHE:
+        return PDF_TEXT_CACHE[url]
     try:
-        response = request_with_retry(session, "GET", url, headers=HEADERS, timeout=45)
+        response = request_with_retry(session, "GET", url, headers=HEADERS, timeout=15, retries=2)
         reader = PdfReader(io.BytesIO(response.content))
         text = "\n".join(page.extract_text() or "" for page in reader.pages)
-        return text, "OK"
+        result = (text, "OK")
     except Exception as exc:  # noqa: BLE001
-        return "", f"PDF解析失败: {exc}"
+        result = ("", f"PDF解析失败: {exc}")
+    PDF_TEXT_CACHE[url] = result
+    return result
 
 
 def collect_launch_records(session: requests.Session) -> pd.DataFrame:
@@ -536,7 +541,7 @@ def collect_launch_records(session: requests.Session) -> pd.DataFrame:
             pdf_extract_status=status,
             verification_channel="基金公司官网PDF；证监会基金电子披露网站按公告标题/基金名称复核。",
         )
-        if idx % 25 == 0:
+        if idx % 10 == 0:
             print(f"  E Fund candidates processed: {idx}/{len(efunds_candidates)}", flush=True)
             time.sleep(0.2)
 
@@ -587,7 +592,7 @@ def collect_launch_records(session: requests.Session) -> pd.DataFrame:
                 pdf_extract_status=status,
                 verification_channel="基金公司官网PDF；证监会基金电子披露网站按公告标题/基金名称复核。",
             )
-        if idx % 25 == 0:
+        if idx % 10 == 0:
             print(f"  GF Fund candidates processed: {idx}/{len(gf_funds)}", flush=True)
             time.sleep(0.2)
 
