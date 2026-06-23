@@ -30,6 +30,11 @@ from pypdf import PdfReader
 
 START = date(2025, 1, 1)
 END = date(2026, 3, 31)
+# Launch announcements can be published before the sale start, and products sold
+# late in Q1 can be established after Q1. These windows keep the crawler
+# complete for the requested period without scanning every historical product.
+ANNOUNCEMENT_LOOKBACK_START = date(2024, 10, 1)
+ESTABLISHMENT_LOOKAHEAD_END = date(2026, 6, 30)
 OUT_DIR = Path("outputs/fund_records")
 RAW_DIR = OUT_DIR / "raw"
 
@@ -109,6 +114,16 @@ def parse_date(value: str | None) -> date | None:
 def in_range(value: str | None) -> bool:
     parsed = parse_date(value)
     return bool(parsed and START <= parsed <= END)
+
+
+def in_candidate_establishment_window(value: str | None) -> bool:
+    parsed = parse_date(value)
+    return bool(parsed and START <= parsed <= ESTABLISHMENT_LOOKAHEAD_END)
+
+
+def in_candidate_announcement_window(value: str | None) -> bool:
+    parsed = parse_date(value)
+    return bool(parsed and ANNOUNCEMENT_LOOKBACK_START <= parsed <= END)
 
 
 def clean_text(value: Any) -> str:
@@ -481,7 +496,11 @@ def collect_launch_records(session: requests.Session) -> pd.DataFrame:
 
     # E Fund official website.
     efunds_products = get_efunds_products(session)
-    for idx, product in enumerate(efunds_products.values(), start=1):
+    efunds_candidates = [
+        p for p in efunds_products.values() if in_candidate_establishment_window(p.get("setupdate", ""))
+    ]
+    print(f"E Fund launch candidates after establishment-date prefilter: {len(efunds_candidates)}", flush=True)
+    for idx, product in enumerate(efunds_candidates, start=1):
         codes = sorted(product["share_codes"])
         if not codes:
             continue
@@ -489,6 +508,8 @@ def collect_launch_records(session: requests.Session) -> pd.DataFrame:
         if not doc:
             continue
         announcement_date = clean_text(doc.get("prop1")) or clean_text(doc.get("publishDate"))[:10]
+        if not in_candidate_announcement_window(announcement_date):
+            continue
         pdf_url = clean_text(doc.get("path"))
         pdf_text, status = read_pdf_text(session, pdf_url)
         sale_start, sale_end = extract_sale_period(pdf_text)
@@ -515,11 +536,15 @@ def collect_launch_records(session: requests.Session) -> pd.DataFrame:
             pdf_extract_status=status,
             verification_channel="基金公司官网PDF；证监会基金电子披露网站按公告标题/基金名称复核。",
         )
-        if idx % 100 == 0:
+        if idx % 25 == 0:
+            print(f"  E Fund candidates processed: {idx}/{len(efunds_candidates)}", flush=True)
             time.sleep(0.2)
 
     # GF Fund official website.
-    gf_funds = parse_gf_all_funds(session)
+    gf_funds = [
+        item for item in parse_gf_all_funds(session) if in_candidate_establishment_window(item.get("create", ""))
+    ]
+    print(f"GF Fund launch candidates after establishment-date prefilter: {len(gf_funds)}", flush=True)
     for idx, item in enumerate(gf_funds, start=1):
         code = item["code"]
         docs = gf_search_sale_docs(session, code)
@@ -529,6 +554,8 @@ def collect_launch_records(session: requests.Session) -> pd.DataFrame:
         base = gf_base_info(session, code)
         for doc in docs:
             announcement_date = doc["time"][:10].replace(".", "-")
+            if not in_candidate_announcement_window(announcement_date):
+                continue
             pdf_url = doc["url"]
             pdf_text, status = read_pdf_text(session, pdf_url)
             sale_start, sale_end = extract_sale_period(pdf_text)
@@ -560,7 +587,8 @@ def collect_launch_records(session: requests.Session) -> pd.DataFrame:
                 pdf_extract_status=status,
                 verification_channel="基金公司官网PDF；证监会基金电子披露网站按公告标题/基金名称复核。",
             )
-        if idx % 100 == 0:
+        if idx % 25 == 0:
+            print(f"  GF Fund candidates processed: {idx}/{len(gf_funds)}", flush=True)
             time.sleep(0.2)
 
     rows = []
@@ -646,20 +674,20 @@ def main() -> None:
     session = requests.Session()
     session.headers.update(HEADERS)
 
-    print("Collecting NERIS application records...")
+    print("Collecting NERIS application records...", flush=True)
     report_df = collect_neris_records(session)
     report_json = RAW_DIR / "neris_report_records.json"
     report_json.write_text(report_df.to_json(orient="records", force_ascii=False, indent=2), encoding="utf-8")
-    print(f"NERIS records: {len(report_df)}")
+    print(f"NERIS records: {len(report_df)}", flush=True)
 
-    print("Collecting launch records from fund company websites...")
+    print("Collecting launch records from fund company websites...", flush=True)
     launch_df = collect_launch_records(session)
     launch_json = RAW_DIR / "launch_records.json"
     launch_json.write_text(launch_df.to_json(orient="records", force_ascii=False, indent=2), encoding="utf-8")
-    print(f"Launch records: {len(launch_df)}")
+    print(f"Launch records: {len(launch_df)}", flush=True)
 
     output_path = write_workbook(report_df, launch_df)
-    print(f"Wrote {output_path}")
+    print(f"Wrote {output_path}", flush=True)
 
 
 if __name__ == "__main__":
