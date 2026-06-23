@@ -133,29 +133,70 @@ def clean_text(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value)).strip()
 
 
+# Fund types aligned with eid.csrc.gov.cn disclosure platform dropdown.
+EID_FUND_TYPES = (
+    "股票型",
+    "货币型",
+    "债券型",
+    "混合型",
+    "QDII",
+    "短期理财债券型",
+    "基金中基金 (FOF)",
+    "商品基金",
+    "不动产投资信托基金",
+)
+
+
 def classify_product_type(name: str, fallback: str = "") -> str:
     source = f"{name} {fallback}"
-    if "REIT" in source or "不动产投资信托" in source:
-        return "REITs"
-    if "FOF" in source or "基金中基金" in source:
-        return "FOF"
+    upper = source.upper()
+    if "REIT" in upper or "不动产投资信托" in source:
+        return "不动产投资信托基金"
+    if "FOF" in upper or "基金中基金" in source:
+        return "基金中基金 (FOF)"
+    if "商品" in source or "黄金" in source or "原油" in source or "豆粕" in source:
+        return "商品基金"
+    if "QDII" in upper:
+        return "QDII"
     if "货币" in source:
         return "货币型"
-    if "同业存单" in source:
-        return "同业存单指数"
-    if "纯债" in source:
-        return "纯债/债券型"
-    if "债券" in source or "债" in source:
-        return "债券型/固收"
-    if "指数" in source or "ETF" in source or "交易型开放式" in source or "联接" in source:
-        return "指数型/ETF/联接"
-    if "QDII" in source:
-        return "QDII"
-    if "股票" in source:
-        return "股票型"
+    if "短期理财" in source or re.search(r"\d+天滚动持有.*债", source):
+        return "短期理财债券型"
     if "混合" in source:
         return "混合型"
-    return fallback or "未识别"
+    if "指数" in source or "ETF" in upper or "交易型开放式" in source or "联接" in source:
+        if "债" in source or "同业存单" in source:
+            return "债券型"
+        return "股票型"
+    if "债券" in source or "债" in source or "同业存单" in source:
+        return "债券型"
+    if "股票" in source:
+        return "股票型"
+    return fallback if fallback in EID_FUND_TYPES else "未识别"
+
+
+def normalize_fund_type(fund_type: str, product_name: str = "") -> str:
+    ft = clean_text(fund_type)
+    if ft in EID_FUND_TYPES:
+        return ft
+    alias_map = {
+        "FOF": "基金中基金 (FOF)",
+        "基金中基金": "基金中基金 (FOF)",
+        "REITs": "不动产投资信托基金",
+        "纯债/债券型": "债券型",
+        "债券型/固收": "债券型",
+        "指数型/ETF/联接": "",
+        "指数型": "",
+        "ETF联接基金": "",
+        "同业存单指数": "债券型",
+    }
+    mapped = alias_map.get(ft, ft)
+    if mapped in EID_FUND_TYPES:
+        return mapped
+    classified = classify_product_type(product_name, ft)
+    if classified != "未识别":
+        return classified
+    return mapped if mapped in EID_FUND_TYPES else "未识别"
 
 
 def extract_product_from_neris(title: str) -> tuple[str, str]:
@@ -534,7 +575,10 @@ def collect_launch_records(session: requests.Session) -> pd.DataFrame:
             continue
         detail = parse_efunds_detail(session, product.get("detail_url", ""))
         custodian = detail.get("custodian") or extract_custodian_from_pdf(pdf_text)
-        fund_type = detail.get("fund_type") or product.get("fund_type") or classify_product_type(product["product_name"])
+        fund_type = normalize_fund_type(
+            detail.get("fund_type") or product.get("fund_type") or classify_product_type(product["product_name"]),
+            product["product_name"],
+        )
         key = f"易方达基金管理有限公司|{product['product_name']}|{pdf_url}"
         launches[key] = LaunchDoc(
             manager="易方达基金管理有限公司",
@@ -589,7 +633,10 @@ def collect_launch_records(session: requests.Session) -> pd.DataFrame:
                 existing.short_names.add(item["name"])
                 continue
             custodian = detail.get("custodian") or extract_custodian_from_pdf(pdf_text)
-            fund_type = base.get("fund_type") or item.get("type") or classify_product_type(product_name)
+            fund_type = normalize_fund_type(
+                base.get("fund_type") or item.get("type") or classify_product_type(product_name),
+                product_name,
+            )
             launches[key] = LaunchDoc(
                 manager="广发基金管理有限公司",
                 product_name=product_name,
@@ -619,7 +666,7 @@ def collect_launch_records(session: requests.Session) -> pd.DataFrame:
                 "产品名称": launch.product_name,
                 "份额代码": ", ".join(sorted(launch.share_codes)),
                 "份额简称": "; ".join(sorted(launch.short_names)),
-                "产品类型": launch.fund_type or classify_product_type(launch.product_name),
+                "产品类型": normalize_fund_type(launch.fund_type or classify_product_type(launch.product_name), launch.product_name),
                 "托管行/托管人": launch.custodian,
                 "首发公告日期": launch.announcement_date,
                 "首发起始日": launch.sale_start,
@@ -659,6 +706,10 @@ def write_workbook(report_df: pd.DataFrame, launch_df: pd.DataFrame) -> Path:
         {
             "项目": "官方核验",
             "说明": "报会：neris.csrc.gov.cn 审批进度公示；首发：基金公司官网PDF + eid.csrc.gov.cn/fund 按公告标题/基金名称查询。",
+        },
+        {
+            "项目": "产品类型口径",
+            "说明": "与证监会基金电子披露平台（eid.csrc.gov.cn）“基金类型”下拉选项一致：股票型、货币型、债券型、混合型、QDII、短期理财债券型、基金中基金 (FOF)、商品基金、不动产投资信托基金。",
         },
         {
             "项目": "注意",
