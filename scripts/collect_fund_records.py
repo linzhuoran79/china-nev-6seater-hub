@@ -150,7 +150,12 @@ EID_FUND_TYPES = (
 def classify_product_type(name: str, fallback: str = "") -> str:
     source = f"{name} {fallback}"
     upper = source.upper()
-    if "REIT" in upper or "不动产投资信托" in source:
+    if (
+        "REIT" in upper
+        or "不动产投资信托" in source
+        or "不动产" in source
+        or "基础设施" in source
+    ):
         return "不动产投资信托基金"
     if "FOF" in upper or "基金中基金" in source:
         return "基金中基金 (FOF)"
