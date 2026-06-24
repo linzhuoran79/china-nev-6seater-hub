@@ -1,0 +1,26 @@
+Collecting NERIS application records...
+NERIS records: 235
+Collecting launch records from fund company websites...
+E Fund launch candidates after establishment-date prefilter: 108
+  E Fund candidates processed: 10/108
+  E Fund candidates processed: 20/108
+  E Fund candidates processed: 30/108
+  E Fund candidates processed: 40/108
+  E Fund candidates processed: 50/108
+  E Fund candidates processed: 60/108
+  E Fund candidates processed: 70/108
+  E Fund candidates processed: 80/108
+  E Fund candidates processed: 90/108
+  E Fund candidates processed: 100/108
+GF Fund launch candidates after establishment-date prefilter: 159
+  GF Fund candidates processed: 10/159
+  GF Fund candidates processed: 20/159
+  GF Fund candidates processed: 30/159
+  GF Fund candidates processed: 40/159
+  GF Fund candidates processed: 70/159
+  GF Fund candidates processed: 80/159
+  GF Fund candidates processed: 100/159
+  GF Fund candidates processed: 110/159
+  GF Fund candidates processed: 140/159
+Launch records: 128
+Wrote outputs/fund_records/易方达_广发_2025_2026Q1_报会与首发记录.xlsx
