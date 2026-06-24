@@ -37,6 +37,9 @@ ANNOUNCEMENT_LOOKBACK_START = date(2024, 10, 1)
 ESTABLISHMENT_LOOKAHEAD_END = date(2026, 6, 30)
 OUT_DIR = Path("outputs/fund_records")
 RAW_DIR = OUT_DIR / "raw"
+LOCAL_OUT_DIR = Path("output")
+LOCAL_CACHE_DIR = LOCAL_OUT_DIR / "cache"
+REPORTING_UNDISCLOSED = "报会阶段未法定披露"
 
 HEADERS = {
     "User-Agent": (
@@ -76,6 +79,30 @@ class LaunchDoc:
 def ensure_dirs() -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     RAW_DIR.mkdir(parents=True, exist_ok=True)
+    LOCAL_OUT_DIR.mkdir(parents=True, exist_ok=True)
+    LOCAL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def product_names_match(left: str, right: str) -> bool:
+    left = clean_text(left)
+    right = clean_text(right)
+    if not left or not right:
+        return False
+    return left == right or left in right or right in left
+
+
+def pick_launch_match(report_name: str, launch_df: pd.DataFrame) -> pd.Series | None:
+    if launch_df.empty:
+        return None
+    matches = launch_df[launch_df["产品名称"].astype(str).apply(lambda x: product_names_match(report_name, x))]
+    if matches.empty:
+        return None
+    if len(matches) == 1:
+        return matches.iloc[0]
+    exact = matches[matches["产品名称"].astype(str) == report_name]
+    if not exact.empty:
+        return exact.iloc[0]
+    return matches.sort_values("首发公告日期").iloc[-1]
 
 
 def request_with_retry(
@@ -265,7 +292,9 @@ def collect_neris_records(session: requests.Session) -> pd.DataFrame:
                 continue
             flows = rec.get("aprvSchdPubFlowViewResultList") or []
             flow_map = {f.get("taskName", ""): f.get("fnshDate", "") for f in flows}
-            report_date = flow_map.get("接收材料") or rec.get("appDate")
+            list_date = clean_text(rec.get("appDate", ""))[:10]
+            receive_date = clean_text(flow_map.get("接收材料", ""))[:10]
+            report_date = list_date or receive_date
             if not in_range(report_date):
                 continue
             app_type, product = extract_product_from_neris(title)
@@ -275,8 +304,8 @@ def collect_neris_records(session: requests.Session) -> pd.DataFrame:
                     "产品名称": product,
                     "产品类型_规则识别": classify_product_type(product),
                     "申请事项": app_type,
-                    "报会日期_接收材料": report_date,
-                    "主列表日期": rec.get("appDate", ""),
+                    "报会日期": report_date,
+                    "报会日期_接收材料": receive_date,
                     "受理通知日期": flow_map.get("受理通知", ""),
                     "反馈意见日期": flow_map.get("书面反馈", ""),
                     "行政许可决定日期": flow_map.get("行政许可决定书", ""),
@@ -294,7 +323,7 @@ def collect_neris_records(session: requests.Session) -> pd.DataFrame:
 
     df = pd.DataFrame(rows)
     if not df.empty:
-        df = df.sort_values(["基金公司", "报会日期_接收材料", "产品名称"]).reset_index(drop=True)
+        df = df.sort_values(["基金公司", "报会日期", "产品名称"]).reset_index(drop=True)
     return df
 
 
@@ -693,6 +722,188 @@ def collect_launch_records(session: requests.Session) -> pd.DataFrame:
     return df
 
 
+def build_merged_summary(report_df: pd.DataFrame, launch_df: pd.DataFrame) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    for _, report in report_df.iterrows():
+        launch = pick_launch_match(str(report.get("产品名称", "")), launch_df)
+        issued = launch is not None
+        custodian = ""
+        custodian_source = ""
+        launch_period = ""
+        launch_pdf = ""
+        if issued and launch is not None:
+            custodian = clean_text(launch.get("托管行/托管人", ""))
+            custodian_source = "首发份额发售公告PDF/基金详情页"
+            launch_period = clean_text(launch.get("首发区间", ""))
+            launch_pdf = clean_text(launch.get("公告PDF链接", ""))
+        rows.append(
+            {
+                "基金公司": report.get("基金公司", ""),
+                "产品名称": report.get("产品名称", ""),
+                "托管行": custodian if issued and custodian else REPORTING_UNDISCLOSED,
+                "托管行来源": custodian_source if issued and custodian else "",
+                "产品类型": report.get("产品类型_规则识别", ""),
+                "报会日期": report.get("报会日期", ""),
+                "报会日期_接收材料": report.get("报会日期_接收材料", ""),
+                "是否已发行": "是" if issued else "否",
+                "首发区间": launch_period,
+                "首发公告PDF链接": launch_pdf,
+                "NERIS查询URL": report.get("NERIS查询URL", ""),
+            }
+        )
+    summary = pd.DataFrame(rows)
+    if not summary.empty:
+        summary = summary.sort_values(["基金公司", "报会日期", "产品名称"]).reset_index(drop=True)
+    return summary
+
+
+def build_data_quality_report(
+    report_df: pd.DataFrame, launch_df: pd.DataFrame, summary_df: pd.DataFrame
+) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+
+    unissued_with_custodian = summary_df[
+        (summary_df["是否已发行"] == "否") & (summary_df["托管行"] != REPORTING_UNDISCLOSED)
+    ]
+    for _, item in unissued_with_custodian.iterrows():
+        rows.append(
+            {
+                "问题类型": "未发行却出现托管行",
+                "产品名称": item["产品名称"],
+                "说明": "逻辑上不应出现，请检查合并规则。",
+                "当前值": item["托管行"],
+            }
+        )
+
+    issued_without_custodian = summary_df[
+        (summary_df["是否已发行"] == "是") & (summary_df["托管行"] == REPORTING_UNDISCLOSED)
+    ]
+    for _, item in issued_without_custodian.iterrows():
+        rows.append(
+            {
+                "问题类型": "已发行但缺少托管行",
+                "产品名称": item["产品名称"],
+                "说明": "已匹配首发公告，但PDF/详情页未抽到托管人。",
+                "当前值": item.get("首发公告PDF链接", ""),
+            }
+        )
+
+    for _, launch in launch_df.iterrows():
+        launch_name = str(launch.get("产品名称", ""))
+        if not any(product_names_match(launch_name, report_name) for report_name in report_df["产品名称"].astype(str)):
+            rows.append(
+                {
+                    "问题类型": "首发无对应报会记录",
+                    "产品名称": launch_name,
+                    "说明": "可能是变更注册、跨期报会或名称匹配未命中。",
+                    "当前值": launch.get("首发区间", ""),
+                }
+            )
+
+    quality = pd.DataFrame(rows)
+    if not quality.empty:
+        quality = quality.drop_duplicates().reset_index(drop=True)
+    return quality
+
+
+def build_verification_channels(report_df: pd.DataFrame, launch_df: pd.DataFrame) -> pd.DataFrame:
+    rows = [
+        {
+            "数据项": "报会日期",
+            "官方渠道": "中国证监会行政许可网上办理系统 NERIS",
+            "网址": "https://neris.csrc.gov.cn/alappr-delare-front/#/home/toPubFlow",
+            "核验方法": "按基金公司或产品全称检索；列表页日期对应字段“报会日期”。",
+        },
+        {
+            "数据项": "报会日期_接收材料",
+            "官方渠道": "NERIS 进度追踪",
+            "网址": "https://neris.csrc.gov.cn/alappr-delare-front/#/home/toPubFlow",
+            "核验方法": "点击“进度追踪”，查看“接收材料”节点日期。",
+        },
+        {
+            "数据项": "托管行",
+            "官方渠道": "基金份额发售公告 PDF",
+            "网址": "基金公司官网 / 证监会基金电子披露平台",
+            "核验方法": "仅对已发行（已披露发售公告）产品适用；报会阶段不应填写托管行。",
+        },
+        {
+            "数据项": "首发区间",
+            "官方渠道": "基金份额发售公告 PDF",
+            "网址": "https://eid.csrc.gov.cn/fund/disclose/list.do",
+            "核验方法": "在“基金募集信息披露”中检索公告标题，读取发售起止日期。",
+        },
+        {
+            "数据项": "产品类型",
+            "官方渠道": "证监会基金电子披露平台",
+            "网址": "https://eid.csrc.gov.cn/fund/disclose/list.do",
+            "核验方法": "按“基金类型”下拉选项核对：股票型、货币型、债券型、混合型、QDII、短期理财债券型、基金中基金 (FOF)、商品基金、不动产投资信托基金。",
+        },
+    ]
+    examples: list[dict[str, Any]] = []
+    for _, item in report_df.head(5).iterrows():
+        examples.append(
+            {
+                "数据项": "报会样例",
+                "官方渠道": item.get("基金公司", ""),
+                "网址": item.get("NERIS查询URL", ""),
+                "核验方法": f"{item.get('产品名称', '')} | 报会日期 {item.get('报会日期', '')}",
+            }
+        )
+    for _, item in launch_df.head(5).iterrows():
+        examples.append(
+            {
+                "数据项": "首发样例",
+                "官方渠道": item.get("基金公司", ""),
+                "网址": item.get("公告PDF链接", ""),
+                "核验方法": f"{item.get('产品名称', '')} | 首发区间 {item.get('首发区间', '')}",
+            }
+        )
+    return pd.DataFrame(rows + examples)
+
+
+def write_local_outputs(
+    report_df: pd.DataFrame,
+    launch_df: pd.DataFrame,
+    summary_df: pd.DataFrame,
+    quality_df: pd.DataFrame,
+    verification_df: pd.DataFrame,
+    run_log: str,
+) -> dict[str, Path]:
+    report_json = LOCAL_OUT_DIR / "报会产品.json"
+    launch_json = LOCAL_OUT_DIR / "首发产品.json"
+    workbook_path = LOCAL_OUT_DIR / "易方达_广发_报会与首发_2025-2026Q1.xlsx"
+    verification_path = LOCAL_OUT_DIR / "易方达_广发_验证渠道_2025-2026Q1.xlsx"
+    run_log_path = LOCAL_OUT_DIR / "run.log"
+
+    report_json.write_text(report_df.to_json(orient="records", force_ascii=False, indent=2), encoding="utf-8")
+    launch_json.write_text(launch_df.to_json(orient="records", force_ascii=False, indent=2), encoding="utf-8")
+    run_log_path.write_text(run_log, encoding="utf-8")
+
+    summary_export = summary_df[
+        ["产品名称", "托管行", "产品类型", "报会日期", "是否已发行", "首发区间", "托管行来源", "报会日期_接收材料"]
+    ].copy()
+
+    with pd.ExcelWriter(workbook_path, engine="openpyxl") as writer:
+        summary_export.to_excel(writer, index=False, sheet_name="报会汇总")
+        report_df.to_excel(writer, index=False, sheet_name="报会明细_NERIS")
+        launch_df.to_excel(writer, index=False, sheet_name="首发明细_官网PDF")
+        if not quality_df.empty:
+            quality_df.to_excel(writer, index=False, sheet_name="数据质量检查")
+
+    with pd.ExcelWriter(verification_path, engine="openpyxl") as writer:
+        verification_df.to_excel(writer, index=False, sheet_name="验证渠道")
+        if not quality_df.empty:
+            quality_df.to_excel(writer, index=False, sheet_name="数据质量检查")
+
+    return {
+        "report_json": report_json,
+        "launch_json": launch_json,
+        "workbook": workbook_path,
+        "verification": verification_path,
+        "run_log": run_log_path,
+    }
+
+
 def write_workbook(report_df: pd.DataFrame, launch_df: pd.DataFrame) -> Path:
     output_path = OUT_DIR / "易方达_广发_2025_2026Q1_报会与首发记录.xlsx"
     readme_rows = [
@@ -702,7 +913,11 @@ def write_workbook(report_df: pd.DataFrame, launch_df: pd.DataFrame) -> Path:
         },
         {
             "项目": "报会记录口径",
-            "说明": "NERIS 审批进度公示中，标题含“募集申请注册”且不含“变更注册”，按“接收材料”日期过滤。",
+            "说明": "NERIS 审批进度公示中，标题含“募集申请注册”且不含“变更注册”；报会日期取列表页 appDate，与官网检索列表一致。",
+        },
+        {
+            "项目": "托管行口径",
+            "说明": "报会阶段法定文件通常不披露托管行；仅当匹配到首发份额发售公告后，才填写托管行并标注来源。",
         },
         {
             "项目": "首发产品口径",
@@ -721,10 +936,17 @@ def write_workbook(report_df: pd.DataFrame, launch_df: pd.DataFrame) -> Path:
             "说明": "托管人为证券公司的ETF/联接基金保留“托管人”原文；字段名写作“托管行/托管人”。",
         },
     ]
+    summary_df = build_merged_summary(report_df, launch_df)
+    quality_df = build_data_quality_report(report_df, launch_df, summary_df)
+    verification_df = build_verification_channels(report_df, launch_df)
+
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
         pd.DataFrame(readme_rows).to_excel(writer, index=False, sheet_name="README_口径与核验")
+        summary_df.to_excel(writer, index=False, sheet_name="报会汇总_托管行按发行状态")
         report_df.to_excel(writer, index=False, sheet_name="报会记录_NERIS")
         launch_df.to_excel(writer, index=False, sheet_name="首发产品_官网PDF")
+        if not quality_df.empty:
+            quality_df.to_excel(writer, index=False, sheet_name="数据质量检查")
 
         # A simple cross-check sheet: product names that appear in both tables by normalized prefix.
         cross_rows = []
@@ -735,35 +957,50 @@ def write_workbook(report_df: pd.DataFrame, launch_df: pd.DataFrame) -> Path:
                 cross_rows.append(
                     {
                         "报会产品名称": report_name,
-                        "报会日期": r.get("报会日期_接收材料", ""),
+                        "报会日期": r.get("报会日期", ""),
                         "首发产品名称": l.get("产品名称", ""),
                         "首发区间": l.get("首发区间", ""),
                         "公告PDF链接": l.get("公告PDF链接", ""),
                     }
                 )
         pd.DataFrame(cross_rows).to_excel(writer, index=False, sheet_name="报会_首发名称交叉匹配")
-    return output_path
+    return output_path, summary_df, quality_df, verification_df
 
 
 def main() -> None:
     ensure_dirs()
     session = requests.Session()
     session.headers.update(HEADERS)
+    log_lines: list[str] = []
 
     print("Collecting NERIS application records...", flush=True)
     report_df = collect_neris_records(session)
     report_json = RAW_DIR / "neris_report_records.json"
     report_json.write_text(report_df.to_json(orient="records", force_ascii=False, indent=2), encoding="utf-8")
     print(f"NERIS records: {len(report_df)}", flush=True)
+    log_lines.append(f"NERIS records: {len(report_df)}")
 
     print("Collecting launch records from fund company websites...", flush=True)
     launch_df = collect_launch_records(session)
     launch_json = RAW_DIR / "launch_records.json"
     launch_json.write_text(launch_df.to_json(orient="records", force_ascii=False, indent=2), encoding="utf-8")
     print(f"Launch records: {len(launch_df)}", flush=True)
+    log_lines.append(f"Launch records: {len(launch_df)}")
 
-    output_path = write_workbook(report_df, launch_df)
+    output_path, summary_df, quality_df, verification_df = write_workbook(report_df, launch_df)
     print(f"Wrote {output_path}", flush=True)
+    log_lines.append(f"Wrote {output_path}")
+
+    local_paths = write_local_outputs(
+        report_df,
+        launch_df,
+        summary_df,
+        quality_df,
+        verification_df,
+        run_log="\n".join(log_lines),
+    )
+    for label, path in local_paths.items():
+        print(f"Wrote local {label}: {path}", flush=True)
 
 
 if __name__ == "__main__":
