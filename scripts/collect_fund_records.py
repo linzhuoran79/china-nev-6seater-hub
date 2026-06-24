@@ -873,7 +873,7 @@ def write_local_outputs(
     launch_json = LOCAL_OUT_DIR / "首发产品.json"
     workbook_path = LOCAL_OUT_DIR / "易方达_广发_报会与首发_2025-2026Q1.xlsx"
     verification_path = LOCAL_OUT_DIR / "易方达_广发_验证渠道_2025-2026Q1.xlsx"
-    run_log_path = LOCAL_OUT_DIR / "run.log"
+    run_log_path = LOCAL_OUT_DIR / "run"
 
     report_json.write_text(report_df.to_json(orient="records", force_ascii=False, indent=2), encoding="utf-8")
     launch_json.write_text(launch_df.to_json(orient="records", force_ascii=False, indent=2), encoding="utf-8")
