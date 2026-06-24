@@ -879,21 +879,13 @@ def write_local_outputs(
     launch_json.write_text(launch_df.to_json(orient="records", force_ascii=False, indent=2), encoding="utf-8")
     run_log_path.write_text(run_log, encoding="utf-8")
 
-    summary_export = summary_df[
-        ["产品名称", "托管行", "产品类型", "报会日期", "是否已发行", "首发区间", "托管行来源", "报会日期_接收材料"]
-    ].copy()
+    summary_export = summary_df[["产品名称", "托管行", "产品类型", "报会日期", "是否已发行"]].copy()
 
     with pd.ExcelWriter(workbook_path, engine="openpyxl") as writer:
-        summary_export.to_excel(writer, index=False, sheet_name="报会汇总")
-        report_df.to_excel(writer, index=False, sheet_name="报会明细_NERIS")
-        launch_df.to_excel(writer, index=False, sheet_name="首发明细_官网PDF")
-        if not quality_df.empty:
-            quality_df.to_excel(writer, index=False, sheet_name="数据质量检查")
+        summary_export.to_excel(writer, index=False, sheet_name="Sheet1")
 
     with pd.ExcelWriter(verification_path, engine="openpyxl") as writer:
         verification_df.to_excel(writer, index=False, sheet_name="验证渠道")
-        if not quality_df.empty:
-            quality_df.to_excel(writer, index=False, sheet_name="数据质量检查")
 
     return {
         "report_json": report_json,
